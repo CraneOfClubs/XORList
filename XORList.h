@@ -573,6 +573,14 @@ private:
 		return _insertBlockPrev(position, begin, end);
 	}
 
+	template<typename LessCompare, typename I>
+	std::pair<iterator, iterator> mergeSequencesHere(const_iterator beginTo, const_iterator endTo, const_iterator beginFrom, 
+		const_iterator endFrom, LessCompare &&isLess, I distance) noexcept {
+		_size += distance;
+		return mergeSequences(beginTo, endTo, beginFrom, endFrom, std::forward<LessCompare>(isLess));
+	}
+
+
 	template<typename I>
 	void _deleteAndFreeBlock(const_iterator begin, const_iterator end, I range) {
 		if (range == 0){
@@ -689,5 +697,38 @@ private:
 
 		std::tie(first, last) = x._deleteBlockHere(first, last, distance).block;
 		_insertBlockPrevHere(position, first, last, distance);
+	}
+
+	void unique() {
+		unique(std::equal_to<T>{});
+	}
+
+	template <typename BinaryPredicate>
+	void unique(BinaryPredicate isEqual) {
+		if (size() < 2)
+			return;
+
+		auto current = cbegin();
+		for (auto prev = current++; current != cend();) {
+			if (isEqual(*prev, *current))
+				current = erase(current);
+			else
+				prev = current++;
+		}
+	}
+
+	void merge(LinkedList &x) noexcept {
+		merge(x, std::less<T>{});
+	}
+
+	template <typename Compare>
+	void merge(LinkedList &x, Compare isLess) noexcept {
+		if (!x.empty())
+		{
+			const auto distance = x.size();
+			const auto range = x.cutSequenceFromThis(x.cbegin(), x.cend(), distance).cutted;
+
+			mergeSequencesToThis(cbegin(), cend(), range.first, range.second, ::std::move(isLess), distance);
+		}
 	}
 };
