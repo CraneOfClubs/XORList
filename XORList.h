@@ -4,6 +4,7 @@
 #include <algorithm> 
 #include <iterator>
 #include <tuple>
+#include <array>
 #include "Utils.h"
 
 
@@ -154,7 +155,7 @@ private:
 		}
 
 		template<typename... Args>
-		Node(Args&&... args) : value(::std::forward<Args>(args)...){
+		Node(Args&&... args) : value(std::forward<Args>(args)...){
 		}
 		Node(const Node&) noexcept = default;
 		Node(Node &&) noexcept = default;
@@ -163,11 +164,19 @@ private:
 		Node& operator=(Node &&) noexcept = default;
 	};
 
+	struct Block {
+		std::pair<iterator, iterator> block;
+		iterator end;
+
+		Block(iterator first, iterator last, iterator end) : block(first, last), end(end) {
+		}
+	};
+
 
 	using RebindAlloc = typename std::allocator_traits<TAllocator>::template rebind_alloc<Node>;
 
 	RebindAlloc allocator;
-	using difference_type = ::std::ptrdiff_t;
+	using difference_type = std::ptrdiff_t;
 	mutable Node nHead;
 	mutable Node nTail;
 	std::size_t _size = 0;
@@ -219,13 +228,11 @@ private:
 		return { { position.previous, node },{ node, position.current } };
 	}
 
-	static std::tuple<iterator, iterator, iterator> _delete_block(const_iterator begin, const_iterator end) noexcept
-	{
+	static Block _deleteBlock(const_iterator begin, const_iterator end) noexcept {
 		if (begin.previous != nullptr) {
 			begin.previous->xor_pointer = _xor(_xor(begin.previous->xor_pointer, begin.current), end.current);
 		}
-		if (end.current != nullptr)
-		{
+		if (end.current != nullptr) {
 			end.current->xor_pointer = _xor(_xor(end.current->xor_pointer, end.previous), begin.previous);
 		}
 
@@ -235,15 +242,89 @@ private:
 		return { { nullptr, begin.current },{ end.previous, nullptr },{ begin.previous, end.current } };
 	}
 
+	static std::pair<iterator, iterator> _insertBlockPrev(const_iterator position, const_iterator begin, const_iterator end) noexcept {
+		begin.current->xor_pointer = _xor(_xor(begin.current->xor_pointer, begin.previous), position.previous);
+		end.previous->xor_pointer = _xor(_xor(end.previous->xor_pointer, end.current), position.current);
+
+		if (position.previous != nullptr) {
+			position.previous->xor_pointer = _xor(_xor(position.previous->xor_pointer, position.current), begin.current);
+		}
+		if (position.current != nullptr) {
+			position.current->xor_pointer = _xor(_xor(position.current->xor_pointer, position.previous), end.previous);
+		}
+
+		return { { position.previous, begin.current },{ end.previous, position.current } };
+	}
+
+	template<typename LessCompare>
+	static std::pair<iterator, iterator> mergeSequences(const_iterator beginTo, const_iterator endTo, const_iterator beginFrom, 
+		const_iterator endFrom, LessCompare &&isLess) noexcept {
+		const_iterator resultBegin = beginTo;
+
+		while (beginFrom != endFrom) {
+			if (beginTo == endTo) {
+				if (resultBegin == beginTo) {
+					std::tie(resultBegin, endTo) = _insertBlockPrev(beginTo, beginFrom, endFrom);
+				}
+				else {
+					endTo = _insertBlockPrev(beginTo, beginFrom, endFrom).second;
+				}
+
+				break;
+			}
+			else if (std::forward<LessCompare>(isLess)(*beginFrom, *beginTo)) {
+				auto cutResult = _deleteBlock(beginFrom, std::next(beginFrom));
+
+				if (resultBegin == beginTo) {
+					std::tie(resultBegin, beginTo) = _insertPrev(beginTo, static_cast<Node *>(cutResult.block.first.current));
+				}
+				else {
+					beginTo = _insertPrev(beginTo, static_cast<Node*>(cutResult.block.first.current)).second;
+				}
+
+				beginFrom = cutResult.end;
+			}
+			else {
+				++beginTo;
+			}
+		}
+
+		return { static_cast<iterator>(resultBegin), static_cast<iterator>(endTo) };
+	}
+
 	//Local private
 	template <typename... Args>
 	void _push_back(Args&&... args) {
-		_insertPrev(cend(), createNode(std::forward<Args>(args)...));
+		_insertPrevHere(cend(), createNode(std::forward<Args>(args)...));
 	}
 
 	template <typename... Args>
 	void _push_front(Args&&... args) {
-		_insertPrev(cbegin(), createNode(std::forward<Args>(args)...));
+		_insertPrevHere(cbegin(), createNode(std::forward<Args>(args)...));
+	}
+
+
+	void swapWithoutAllocators(LinkedList &other) {
+		const auto thisDistance = size();
+		const auto otherDistance = other.size();
+		if (!empty()) {
+			auto thisBlock = _deleteBlockHere(cbegin(), cend(), thisDistance);
+
+			if (!other.empty()) {
+				auto otherBlock = other._deleteBlockHere(other.cbegin(), other.cend(), otherDistance);
+				(void)_insertBlockPrevHere(cbegin(), otherBlock.block.first, otherBlock.block.second,
+					otherDistance);
+			}
+
+			(void)other._insertBlockPrevHere(other.cbegin(), thisBlock.block.first,
+				thisBlock.block.second, thisDistance);
+		}
+		else if (!other.empty())
+		{
+			auto otherCutResult = other._deleteBlockHere(other.cbegin(), other.cend(), otherDistance);
+			(void)_insertBlockPrevHere(cbegin(), otherCutResult.block.first, otherCutResult.block.second,
+				otherDistance);
+		}
 	}
 
 	public:
@@ -315,13 +396,91 @@ private:
 		return { reinterpret_cast<Node*>(nTail.xor_pointer), &nTail };
 	}
 
-	struct Block {
-		std::pair<iterator, iterator> block;
-		iterator end;
+	template<typename Alloc = RebindAlloc>
+	typename std::enable_if<std::allocator_traits<Alloc>::propagate_on_container_swap::value>::type
+		swapImpl(LinkedList &other) {
+		std::swap(allocator, other.allocator);
+		swapWithoutAllocators(other);
+	}
 
-		Block(iterator first, iterator last, iterator end): block(first, last), end(end){
+	template<typename Alloc = RebindAlloc>
+	typename std::enable_if<!std::allocator_traits<Alloc>::propagate_on_container_swap::value>::type
+		swapImpl(LinkedList &other) {
+		swapWithoutAllocators(other);
+	}
+
+	void sort() noexcept
+	{
+		sort(std::less<T>{});
+	}
+
+	template <class ComparateTo>
+	void sort(ComparateTo isLess) noexcept
+	{
+		using Range = std::pair<const_iterator, const_iterator>;
+		struct NullableRange {
+			Range range;
+			bool isNull = true;
+		};
+		const auto thisSize = size();
+
+		if (thisSize < 2)
+			return;
+
+		std::array<NullableRange, 32> sortedRanges;
+		while (!empty()) {
+			Range newRange = _deleteBlockHere(cbegin(), ++cbegin(), 1).block;
+
+			std::uint32_t i = 0;
+			for (; i < sortedRanges.size(); ++i) {
+				if (sortedRanges[i].isNull) {
+					sortedRanges[i].range = newRange;
+					sortedRanges[i].isNull = false;
+					break;
+				}
+				else {
+					newRange = mergeSequences(sortedRanges[i].range.first, sortedRanges[i].range.second,
+						newRange.first, newRange.second, isLess);
+					sortedRanges[i].isNull = true;
+				}
+			}
+
+			if (i == sortedRanges.size()) {
+				sortedRanges.back().range = newRange;
+				sortedRanges.back().isNull = false;
+			}
 		}
-	};
+
+		NullableRange result;
+		for (std::uint32_t i = 0; i < sortedRanges.size(); ++i) {
+			if (!sortedRanges[i].isNull) {
+				if (result.isNull) {
+					result = sortedRanges[i];
+				}
+				else {
+					result.range = mergeSequences(sortedRanges[i].range.first, sortedRanges[i].range.second,
+						result.range.first, result.range.second, isLess);
+				}
+			}
+		}
+		(void)_insertBlockPrevHere(cend(), result.range.first, result.range.second, thisSize);
+	}
+
+
+	//template<typename Alloc = RebindAlloc>
+	//typename std::enable_if<std::allocator_traits<Alloc>::propagate_on_container_copy_assignment::value>::type
+	//	copyAssignmentImpl(const LinkedList &right) {
+	//	clear();
+	//	allocator = right.allocator;
+	//	assign(right.cbegin(), right.cend());
+	//}
+
+	//template<typename Alloc = RebindAlloc>
+	//typename std::enable_if<!std::allocator_traits<Alloc>::propagate_on_container_copy_assignment::value>::type
+	//	copyAssignmentImpl(const LinkedList &right) {
+	//	clear();
+	//	assign(right.cbegin(), right.cend());
+	//}
 
 	template<typename I>
 	Block _deleteBlockHere(const_iterator first, const_iterator last, I distance) noexcept {
@@ -329,28 +488,18 @@ private:
 		return _deleteBlock(first, last);
 	}
 
-	static Block _deleteBlock(const_iterator begin, const_iterator end) noexcept {
-		if (begin.previous != nullptr) {
-			begin.previous->xor_pointer = _xor(_xor(begin.previous->xor_pointer, begin.current), end.current);
-		}
-		if (end.current != nullptr) {
-			end.current->xor_pointer = _xor(_xor(end.current->xor_pointer, end.previous), begin.previous);
-		}
-
-		begin.current->xor_pointer = _xor(_xor(begin.current->xor_pointer, begin.previous), nullptr);
-		end.previous->xor_pointer = _xor(_xor(end.previous->xor_pointer, end.current), nullptr);
-
-		return { { nullptr, begin.current },{ end.previous, nullptr },{ begin.previous, end.current } };
+	template<typename I>
+	std::pair<iterator, iterator> _insertBlockPrevHere(const_iterator position, const_iterator begin, const_iterator end, I range) noexcept {
+		_size += range;
+		return _insertBlockPrev(position, begin, end);
 	}
 
-
 	template<typename I>
-	void _deleteAndFreeBlock(const_iterator begin, const_iterator end, I distance)
-	{
-		if (distance == 0){
+	void _deleteAndFreeBlock(const_iterator begin, const_iterator end, I range) {
+		if (range == 0){
 			return;
 		}
-		std::tie(begin, end) = _deleteBlockHere(begin, end, distance).block; //tuple of refs
+		std::tie(begin, end) = _deleteBlockHere(begin, end, range).block; //tuple of refs
 
 		for (; begin != end; ) {
 			for (; begin != end; ) {
@@ -363,7 +512,7 @@ private:
 	iterator erase(const_iterator first, const_iterator last) {
 		if (first != last) {
 			auto test = std::distance(first, last);
-			_deleteAndFreeBlock(first, last, ::std::distance(first, last));
+			_deleteAndFreeBlock(first, last, std::distance(first, last));
 		}
 		return { first.previous, last.current };
 	}
@@ -386,5 +535,9 @@ private:
 
 	bool empty() const noexcept {
 		return (size() == 0);
+	}
+
+	void clear() {
+		_deleteAndFreeBlock(cbegin(), cend(), size());
 	}
 };

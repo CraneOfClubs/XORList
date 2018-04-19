@@ -2,6 +2,19 @@
 #include "Utils.h"
 #include <string>
 
+void test_sort() {
+	LinkedList<double> *test_list = new LinkedList<double>();
+	test_list->push_back(10.0);
+	auto test2 = test_list->back();
+	test_list->push_back(20.0);
+	auto test21 = test_list->back();
+	test_list->push_back(15.0);
+	auto test22 = test_list->back();
+	test_list->sort();
+	auto test31 = test_list->back();
+	//test_list->pop_back();
+}
+
 int main() {
 	LinkedList<double> *test_list = new LinkedList<double>();
 	auto test  = test_list->begin();
@@ -16,5 +29,7 @@ int main() {
 	test_list->pop_back();
 	auto test5 = test_list->back();
 	auto test6 = test_list->front();
+	test_sort();
 	return 0;
 }
+
