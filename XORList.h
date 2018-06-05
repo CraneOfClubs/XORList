@@ -5,7 +5,7 @@
 #include <iterator>
 #include <tuple>
 #include <array>
-#include "Utils.h"
+#include <initializer_list>
 
 
 template <typename T, class TAllocator = std::allocator<T>>
@@ -14,21 +14,15 @@ class LinkedList
 public:
  //ѕочему не биндитс€ напр€мую?
 
-
-	LinkedList() : LinkedList(TAllocator()) {
-	}
-
-	explicit LinkedList(const TAllocator &alloc) : allocator(alloc), nHead(&nTail), nTail(&nHead) {
-	}
 	template<typename Iter, typename V>
 	class Iterator;
 	struct Node;
+	typedef T value_type;
 
 	class const_iterator;
 
 	class iterator : public Iterator<iterator, T>
 	{
-
 	public:
 		iterator() noexcept = default;
 		iterator(const iterator&) noexcept = default;
@@ -67,6 +61,51 @@ public:
 	};
 
 
+	LinkedList() : LinkedList(TAllocator()) {
+	}
+
+	explicit LinkedList(const TAllocator &alloc) : allocator(alloc), nHead(&nTail), nTail(&nHead) {
+	}
+
+	LinkedList(std::initializer_list<T> il, const TAllocator &alloc = TAllocator()) : LinkedList(alloc) {
+		assign(std::move(il));
+	}
+
+	explicit LinkedList(std::size_t n, const TAllocator &alloc = TAllocator()): LinkedList(alloc) {
+		resize(n);
+	}
+
+	LinkedList(std::size_t n, const T& val, const TAllocator &alloc = TAllocator()) : LinkedList(alloc){
+		resize(n, val);
+	}
+
+	LinkedList(const LinkedList &other)
+		: LinkedList(::std::allocator_traits<TAllocator>::select_on_container_copy_construction(other.allocator)) {
+		insert(cbegin(), other.cbegin(), other.cend());
+	}
+
+	LinkedList(LinkedList &&other) : allocator(std::move(other.allocator)), nHead(&nTail), nTail(&nHead) {
+		if (!other.empty())
+			splice(cbegin(), other);
+	}
+
+	virtual ~LinkedList(){
+		clear();
+	}
+
+	LinkedList& operator=(const LinkedList &right){
+		if (this != ::std::addressof(right))
+			_copyAssignment(right);
+		return *this;
+	}
+
+	LinkedList& operator=(LinkedList &&right){
+		if (this != ::std::addressof(right))
+			_moveAssignment(std::move(right));
+		return *this;
+	}
+
+	
 	template<typename Iter, typename V>
 	class Iterator {
 
@@ -146,6 +185,10 @@ public:
 
 
 
+#ifdef DEBUG_TEST
+	int amount_of_copy = 0;
+#endif // DEBUG_TEST
+
 private:
 	//friend class Utils;
 	struct Node {
@@ -157,7 +200,18 @@ private:
 		template<typename... Args>
 		Node(Args&&... args) : value(std::forward<Args>(args)...){
 		}
+#ifdef DEBUG_TEST
+
+		Node(const Node& other) noexcept {
+			xor_pointer = other.xor_pointer;
+			value = other.value;
+			amount_of_copy++;
+		}
+#else
 		Node(const Node&) noexcept = default;
+#endif // DEBUG_TEST
+
+
 		Node(Node &&) noexcept = default;
 		virtual ~Node() = default;
 		Node& operator=(const Node&) noexcept = default;
@@ -317,7 +371,6 @@ private:
 		_insertPrevHere(cbegin(), createNode(std::forward<Args>(args)...));
 	}
 
-
 	void swapWithoutAllocators(LinkedList &other) {
 		const auto thisDistance = size();
 		const auto otherDistance = other.size();
@@ -326,32 +379,33 @@ private:
 
 			if (!other.empty()) {
 				auto otherBlock = other._deleteBlockHere(other.cbegin(), other.cend(), otherDistance);
-				(void)_insertBlockPrevHere(cbegin(), otherBlock.block.first, otherBlock.block.second,
-					otherDistance);
+				_insertBlockPrevHere(cbegin(), otherBlock.block.first, otherBlock.block.second, otherDistance);
 			}
 
-			(void)other._insertBlockPrevHere(other.cbegin(), thisBlock.block.first,
-				thisBlock.block.second, thisDistance);
+			other._insertBlockPrevHere(other.cbegin(), thisBlock.block.first, thisBlock.block.second, thisDistance);
 		}
 		else if (!other.empty())
 		{
 			auto otherCutResult = other._deleteBlockHere(other.cbegin(), other.cend(), otherDistance);
-			(void)_insertBlockPrevHere(cbegin(), otherCutResult.block.first, otherCutResult.block.second,
-				otherDistance);
+			_insertBlockPrevHere(cbegin(), otherCutResult.block.first, otherCutResult.block.second, otherDistance);
 		}
 	}
 
 	public:
+		//“ест под сплайс чтобы не было копировани€.
+		// онстантные итераторы
+		// онструкторы с итераторами и конструкторы с интами (констекспр).
 	//Public contract -----------------------------------------------------------
 
 	template <typename... Args>
 	void emplace_back(Args&&... args) {
-		_push_back(args);
+		int t = 0;
+		_insertPrevHere(cend(), createNode(::std::forward<Args>(args)...));
 	}
 
 	template <typename... Args>
 	void emplace_front(Args&&... args) {
-		_push_front(args);
+		_insertPrevHere(cbegin(), createNode(::std::forward<Args>(args)...));
 	}
 
 	T& front() noexcept {
@@ -419,6 +473,8 @@ private:
 	}
 
 	void assign(std::initializer_list<T> il) {
+		auto test = il.begin();
+		auto test2 = il.end();
 		assign(il.begin(), il.end());
 	}
 
@@ -442,13 +498,12 @@ private:
 	}
 
 	template <typename InputIterator>
-	typename std::enable_if<::std::is_base_of<::std::input_iterator_tag,
-	typename std::iterator_traits<InputIterator>::iterator_category>::value>::type
-	assign(InputIterator first, InputIterator last)
+	typename ::std::enable_if<::std::is_base_of<::std::input_iterator_tag, typename ::std::iterator_traits<InputIterator>::iterator_category>::value>::type
+				assign(InputIterator first, InputIterator last)
 	{
 		for (auto iter = begin(); iter != end(); ++iter, ++first) {
 			if (first == last) {
-				(void)erase(iter, end());
+				erase(iter, end());
 				return;
 			}
 			*iter = *first;
@@ -488,7 +543,7 @@ private:
 		if (thisSize < 2)
 			return;
 
-		std::array<NullableRange, 32> sortedRanges;
+		std::array<NullableRange, 64> sortedRanges;
 		while (!empty()) {
 			Range newRange = _deleteBlockHere(cbegin(), ++cbegin(), 1).block;
 
@@ -507,8 +562,8 @@ private:
 			}
 
 			if (i == sortedRanges.size()) {
-				sortedRanges.back().range = newRange;
-				sortedRanges.back().isNull = false;
+				//sortedRanges.back().range = newRange;
+				//sortedRanges.back().isNull = false;
 			}
 		}
 
@@ -541,15 +596,15 @@ private:
 		assign(rval.cbegin(), rval.cend());
 	}
 
-	template<typename Alloc = NodeAllocator>
-	typename ::std::enable_if<::std::allocator_traits<Alloc>::propagate_on_container_move_assignment::value>::type _moveAssignment(LinkedList &&rval) {
+	template<typename Alloc = RebindAlloc>
+	typename std::enable_if<std::allocator_traits<Alloc>::propagate_on_container_move_assignment::value>::type _moveAssignment(LinkedList &&rval) {
 		clear();
-		allocator = std::move(right.allocator);
-		splice(cbegin(), right);
+		allocator = std::move(rval.allocator);
+		splice(cbegin(), rval);
 	}
 
-	template<typename Alloc = NodeAllocator>
-	typename ::std::enable_if<!::std::allocator_traits<Alloc>::propagate_on_container_move_assignment::value>::type _moveAssignment(LinkedList &&rval) {
+	template<typename Alloc = RebindAlloc>
+	typename std::enable_if<!::std::allocator_traits<Alloc>::propagate_on_container_move_assignment::value>::type _moveAssignment(LinkedList &&rval) {
 		clear();
 		if (allocator == rval.allocator) {
 			splice(cbegin(), rval);
@@ -604,7 +659,7 @@ private:
 	}
 
 	iterator erase(const_iterator position) {
-		return erase(position, std::next(position)); //Does not change iterator;
+		return erase(position, std::next(position));
 	}
 
 	void pop_front() {
@@ -670,7 +725,7 @@ private:
 
 	void splice(const_iterator position, LinkedList &x) noexcept
 	{
-		if ((this == ::std::addressof(x)) || (x.empty()))
+		if ((this == std::addressof(x)) || (x.empty()))
 			return;
 
 		const auto distance = x.size();
@@ -681,7 +736,7 @@ private:
 
 	void splice(const_iterator position, LinkedList &x, const_iterator i) noexcept
 	{
-		if ((this == std::addressof(x)) && ((position == i) || (position.prev == i.current)))
+		if ((this == std::addressof(x)) && ((position == i) || (position.previous == i.current)))
 			return;
 
 		const auto range = x._deleteBlockHere(i, std::next(i), 1).block;
@@ -693,7 +748,7 @@ private:
 		if (first == last)
 			return;
 
-		const size_type distance = (this == std::addressof(x)) ? size() : std::distance(first, last);
+		const size_t distance = (this == std::addressof(x)) ? size() : std::distance(first, last);
 
 		std::tie(first, last) = x._deleteBlockHere(first, last, distance).block;
 		_insertBlockPrevHere(position, first, last, distance);
@@ -726,9 +781,9 @@ private:
 		if (!x.empty())
 		{
 			const auto distance = x.size();
-			const auto range = x.cutSequenceFromThis(x.cbegin(), x.cend(), distance).cutted;
+			const auto range = x._deleteBlockHere(x.cbegin(), x.cend(), distance).block;
 
-			mergeSequencesToThis(cbegin(), cend(), range.first, range.second, ::std::move(isLess), distance);
+			mergeSequencesHere(cbegin(), cend(), range.first, range.second, ::std::move(isLess), distance);
 		}
 	}
 };

@@ -3,3 +3,9 @@
 ################################################################################
 
 /Debug
+/3rdparty
+/LastCoverageResults.log
+/XOR.vcxproj.user
+/XOR.vcxproj.filters
+/XOR.vcxproj
+/Utils.h
